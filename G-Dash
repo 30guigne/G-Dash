@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dash Runner</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background-color: #111;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    h1 {
+      margin-bottom: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: #00e5ff;
+      text-shadow: 0 0 10px rgba(0, 229, 255, 0.5);
+    }
+    #game-container {
+      position: relative;
+      width: 800px;
+      height: 400px;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+      border: 3px solid #333;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    canvas {
+      background-color: #0d0f18;
+      display: block;
+    }
+    .ui-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.75);
+      z-index: 10;
+    }
+    .hidden {
+      display: none !important;
+    }
+    .btn-container {
+      display: flex;
+      gap: 15px;
+      margin-top: 20px;
+    }
+    button {
+      padding: 12px 24px;
+      font-size: 16px;
+      font-weight: bold;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: transform 0.1s, background-color 0.2s;
+    }
+    button:hover {
+      transform: scale(1.05);
+    }
+    .btn-easy { background-color: #4caf50; color: white; }
+    .btn-medium { background-color: #ff9800; color: white; }
+    .btn-hard { background-color: #f44336; color: white; }
+    .btn-retry { background-color: #00e5ff; color: #111; }
+
+    #hud {
+      position: absolute;
+      top: 15px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      justify-content: space-between;
+      font-weight: bold;
+      font-size: 18px;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .progress-bar-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.1);
+    }
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: #00e5ff;
+      box-shadow: 0 0 8px #00e5ff;
+      transition: width 0.1s linear;
+    }
+    .controls-hint {
+      margin-top: 15px;
+      font-size: 14px;
+      color: #aaa;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Dash Runner</h1>
+
+  <div id="game-container">
+    <div class="progress-bar-container">
+      <div id="progress-bar"></div>
+    </div>
+    
+    <div id="hud">
+      <div id="level-title">Level 1</div>
+      <div id="attempts">Attempt 1</div>
+    </div>
+
+    <!-- Menu Screen -->
+    <div id="menu-screen" class="ui-overlay">
+      <h2>Select Difficulty</h2>
+      <div class="btn-container">
+        <button class="btn-easy" onclick="selectLevel(0)">Easy</button>
+        <button class="btn-medium" onclick="selectLevel(1)">Medium</button>
+        <button class="btn-hard" onclick="selectLevel(2)">Hard</button>
+      </div>
+      <p class="controls-hint">Controls: Press SPACE, UP ARROW, or CLICK to Jump</p>
+    </div>
+
+    <!-- Game Over Screen -->
+    <div id="gameover-screen" class="ui-overlay hidden">
+      <h2 style="color: #f44336; margin-bottom: 10px;">Crash!</h2>
+      <p id="gameover-stats">Progress: 0%</p>
+      <div class="btn-container">
+        <button class="btn-retry" onclick="restartLevel()">Try Again</button>
+        <button style="background: #555; color: white;" onclick="showMenu()">Level Select</button>
+      </div>
+    </div>
+
+    <!-- Level Complete Screen -->
+    <div id="win-screen" class="ui-overlay hidden">
+      <h2 style="color: #4caf50; margin-bottom: 10px;">Level Complete!</h2>
+      <p id="win-stats">Attempts: 1</p>
+      <div class="btn-container">
+        <button class="btn-retry" onclick="showMenu()">Select Level</button>
+      </div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const menuScreen = document.getElementById("menu-screen");
+    const gameoverScreen = document.getElementById("gameover-screen");
+    const winScreen = document.getElementById("win-screen");
+    const progressBar = document.getElementById("progress-bar");
+    const levelTitleUI = document.getElementById("level-title");
+    const attemptsUI = document.getElementById("attempts");
+    const gameoverStats = document.getElementById("gameover-stats");
+    const winStats = document.getElementById("win-stats");
+
+    // Game Config & Constants
+    const GRAVITY = 0.65;
+    const JUMP_FORCE = -11.5;
+    const GROUND_Y = 320;
+    const CUBE_SIZE = 30;
+
+    // Game States
+    let gameState = "MENU"; // MENU, PLAYING, GAMEOVER, WIN
+    let currentLevelIndex = 0;
+    let attempts = 1;
+    let cameraX = 0;
+
+    // Player Object
+    let player = {
+      x: 100,
+      y: GROUND_Y - CUBE_SIZE,
+      vy: 0,
+      rotation: 0,
+      isGrounded: false,
+      reset: function() {
+        this.x = 100;
+        this.y = GROUND_Y - CUBE_SIZE;
+        this.vy = 0;
+        this.rotation = 0;
+        this.isGrounded = true;
+      }
+    };
+
+    // Level Definitions (S = Spike, B = Block, P = Pad)
+    const levels = [
+      {
+        name: "Easy: Breeze",
+        speed: 5.5,
+        color: "#1b5e20",
+        length: 2200,
+        obstacles: [
+          { type: 'S', x: 500 },
+          { type: 'S', x: 800 },
+          { type: 'B', x: 1050, y: GROUND_Y - 40, w: 100, h: 40 },
+          { type: 'S', x: 1300 },
+          { type: 'S', x: 1340 },
+          { type: 'B', x: 1600, y: GROUND_Y - 40, w: 40, h: 40 },
+          { type: 'S', x: 1600, y: GROUND_Y - 70 }, // Spike on block
+          { type: 'S', x: 1900 }
+        ]
+      },
+      {
+        name: "Medium: Rhythm",
+        speed: 6.5,
+        color: "#e65100",
+        length: 2600,
+        obstacles: [
+          { type: 'S', x: 450 },
+          { type: 'S', x: 485 },
+          { type: 'B', x: 750, y: GROUND_Y - 40, w: 120, h: 40 },
+          { type: 'S', x: 790, y: GROUND_Y - 70 },
+          { type: 'S', x: 1050 },
+          { type: 'S', x: 1085 },
+          { type: 'B', x: 1300, y: GROUND_Y - 40, w: 40, h: 40 },
+          { type: 'B', x: 1340, y: GROUND_Y - 80, w: 40, h: 80 },
+          { type: 'S', x: 1550 },
+          { type: 'S', x: 1800 },
+          { type: 'S', x: 1835 },
+          { type: 'S', x: 1870 },
+          { type: 'B', x: 2100, y: GROUND_Y - 40, w: 150, h: 40 }
+        ]
+      },
+      {
+        name: "Hard: Overdrive",
+        speed: 8.0,
+        color: "#b71c1c",
+        length: 3000,
+        obstacles: [
+          { type: 'S', x: 400 },
+          { type: 'S', x: 435 },
+          { type: 'S', x: 700 },
+          { type: 'B', x: 880, y: GROUND_Y - 40, w: 40, h: 40 },
+          { type: 'B', x: 920, y: GROUND_Y - 80, w: 40, h: 80 },
+          { type: 'S', x: 920, y: GROUND_Y - 110 },
+          { type: 'S', x: 1200 },
+          { type: 'S', x: 1235 },
+          { type: 'S', x: 1270 },
+          { type: 'B', x: 1500, y: GROUND_Y - 40, w: 200, h: 40 },
+          { type: 'S', x: 1550, y: GROUND_Y - 70 },
+          { type: 'S', x: 1620, y: GROUND_Y - 70 },
+          { type: 'S', x: 1950 },
+          { type: 'B', x: 2150, y: GROUND_Y - 40, w: 40, h: 40 },
+          { type: 'S', x: 2350 },
+          { type: 'S', x: 2385 },
+          { type: 'S', x: 2420 },
+          { type: 'S', x: 2455 }
+        ]
+      }
+    ];
+
+    // Controls
+    let jumpRequested = false;
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        jumpRequested = true;
+        if (gameState === "PLAYING") e.preventDefault();
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        jumpRequested = false;
+      }
+    });
+
+    canvas.addEventListener("mousedown", () => { jumpRequested = true; });
+    canvas.addEventListener("mouseup", () => { jumpRequested = false; });
+
+    function selectLevel(index) {
+      currentLevelIndex = index;
+      attempts = 1;
+      startLevel();
+    }
+
+    function restartLevel() {
+      attempts++;
+      startLevel();
+    }
+
+    function startLevel() {
+      player.reset();
+      cameraX = 0;
+      gameState = "PLAYING";
+
+      menuScreen.classList.add("hidden");
+      gameoverScreen.classList.add("hidden");
+      winScreen.classList.add("hidden");
+
+      levelTitleUI.textContent = levels[currentLevelIndex].name;
+      attemptsUI.textContent = "Attempt " + attempts;
+    }
+
+    function showMenu() {
+      gameState = "MENU";
+      menuScreen.classList.remove("hidden");
+      gameoverScreen.classList.add("hidden");
+      winScreen.classList.add("hidden");
+      progressBar.style.width = "0%";
+    }
+
+    function triggerGameOver() {
+      gameState = "GAMEOVER";
+      const lvl = levels[currentLevelIndex];
+      const progress = Math.min(100, Math.floor((player.x / lvl.length) * 100));
+      gameoverStats.textContent = `Progress: ${progress}%`;
+      gameoverScreen.classList.remove("hidden");
+    }
+
+    function triggerWin() {
+      gameState = "WIN";
+      winStats.textContent = `Completed in ${attempts} attempt(s)!`;
+      winScreen.classList.remove("hidden");
+    }
+
+    // Main Update Loop
+    function update() {
+      if (gameState !== "PLAYING") return;
+
+      const lvl = levels[currentLevelIndex];
+
+      // Forward Movement
+      player.x += lvl.speed;
+      cameraX = player.x - 100;
+
+      // Jump Impulse
+      if (jumpRequested && player.isGrounded) {
+        player.vy = JUMP_FORCE;
+        player.isGrounded = false;
+      }
+
+      // Apply Gravity
+      player.vy += GRAVITY;
+      player.y += player.vy;
+
+      // Rotate player in air
+      if (!player.isGrounded) {
+        player.rotation += 8;
+      } else {
+        // Snap rotation to nearest 90 deg on ground
+        player.rotation = Math.round(player.rotation / 90) * 90;
+      }
+
+      // Ground Collision Check
+      if (player.y >= GROUND_Y - CUBE_SIZE) {
+        player.y = GROUND_Y - CUBE_SIZE;
+        player.vy = 0;
+        player.isGrounded = true;
+      }
+
+      // Obstacle Collision Checks
+      for (let obs of lvl.obstacles) {
+        if (obs.type === 'S') {
+          // Spike Specs
+          let sx = obs.x;
+          let sy = obs.y || GROUND_Y;
+          let sw = 30;
+          let sh = 30;
+
+          if (checkSpikeCollision(player.x, player.y, CUBE_SIZE, CUBE_SIZE, sx, sy, sw, sh)) {
+            triggerGameOver();
+            return;
+          }
+        } else if (obs.type === 'B') {
+          // Block Collision logic
+          let bx = obs.x;
+          let by = obs.y;
+          let bw = obs.w;
+          let bh = obs.h;
+
+          // AABB Box overlap check
+          if (
+            player.x < bx + bw &&
+            player.x + CUBE_SIZE > bx &&
+            player.y < by + bh &&
+            player.y + CUBE_SIZE > by
+          ) {
+            // Landing on top of block
+            if (player.vy >= 0 && player.y + CUBE_SIZE - player.vy <= by + 10) {
+              player.y = by - CUBE_SIZE;
+              player.vy = 0;
+              player.isGrounded = true;
+            } else {
+              // Hit the side/bottom of a block -> Crash
+              triggerGameOver();
+              return;
+            }
+          }
+        }
+      }
+
+      // Level Progress Check
+      let progressPct = Math.min(100, (player.x / lvl.length) * 100);
+      progressBar.style.width = progressPct + "%";
+
+      if (player.x >= lvl.length) {
+        triggerWin();
+      }
+    }
+
+    // Helper: Triangle-Box hit detection approximation
+    function checkSpikeCollision(px, py, pw, ph, sx, sy, sw, sh) {
+      // Inset bounding box for fairer hitbox precision
+      const margin = 5;
+      return (
+        px + margin < sx + sw &&
+        px + pw - margin > sx &&
+        py + margin < sy &&
+        py + ph - margin > sy - sh
+      );
+    }
+
+    // Render Loop
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const lvl = levels[currentLevelIndex] || levels[0];
+
+      // Draw Background Accent
+      ctx.fillStyle = lvl.color;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Grid Pattern
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.05)";
+      ctx.lineWidth = 1;
+      const gridSize = 40;
+      const offsetX = -(cameraX % gridSize);
+      for (let x = offsetX; x < canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+
+      // Draw Ground
+      ctx.fillStyle = "#090a10";
+      ctx.fillRect(0, GROUND_Y, canvas.width, canvas.height - GROUND_Y);
+
+      ctx.strokeStyle = "#00e5ff";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(0, GROUND_Y);
+      ctx.lineTo(canvas.width, GROUND_Y);
+      ctx.stroke();
+
+      ctx.save();
+      ctx.translate(-cameraX, 0);
+
+      // Draw Obstacles
+      for (let obs of lvl.obstacles) {
+        if (obs.type === 'S') {
+          // Spike
+          let sy = obs.y || GROUND_Y;
+          ctx.fillStyle = "#ff2a6d";
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 2;
+
+          ctx.beginPath();
+          ctx.moveTo(obs.x, sy);
+          ctx.lineTo(obs.x + 15, sy - 30);
+          ctx.lineTo(obs.x + 30, sy);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        } else if (obs.type === 'B') {
+          // Block
+          ctx.fillStyle = "#1d2238";
+          ctx.strokeStyle = "#00e5ff";
+          ctx.lineWidth = 2;
+
+          ctx.fillRect(obs.x, obs.y, obs.w, obs.h);
+          ctx.strokeRect(obs.x, obs.y, obs.w, obs.h);
+        }
+      }
+
+      // Draw Finish Line
+      ctx.fillStyle = "#00ff66";
+      ctx.fillRect(lvl.length, 0, 10, GROUND_Y);
+
+      // Draw Player
+      ctx.save();
+      ctx.translate(player.x + CUBE_SIZE / 2, player.y + CUBE_SIZE / 2);
+      ctx.rotate((player.rotation * Math.PI) / 180);
+
+      // Player Fill & Outline
+      ctx.fillStyle = "#ffcc00";
+      ctx.fillRect(-CUBE_SIZE / 2, -CUBE_SIZE / 2, CUBE_SIZE, CUBE_SIZE);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(-CUBE_SIZE / 2, -CUBE_SIZE / 2, CUBE_SIZE, CUBE_SIZE);
+
+      // Player Face Details
+      ctx.fillStyle = "#111";
+      ctx.fillRect(-8, -8, 5, 8);
+      ctx.fillRect(3, -8, 5, 8);
+      ctx.fillRect(-6, 4, 12, 3);
+
+      ctx.restore();
+
+      ctx.restore();
+    }
+
+    function loop() {
+      update();
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    loop();
+  </script>
+</body>
+</html>
